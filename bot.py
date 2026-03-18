@@ -3,36 +3,30 @@ import os
 import re
 import tempfile
 import requests
-from telegram import Update, InputFile
+from telegram import Update, InputFile, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8651979197:AAFOFTR5s8vzFhZ-6K4q1jgIBoGOyup5qUk")
-MODEL = "arcee-ai/trinity-large-preview:free"
+MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 PORT = int(os.environ.get("PORT", 8443))
 APP_URL = os.environ.get("APP_URL", "")
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 def _load_keys():
     keys = []
-    raw = os.environ.get(
-        "OPENROUTER_KEYS",
-        "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,"
-        "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,"
-        "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,"
-        "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"
-    )
+    raw = os.environ.get("GROQ_KEYS", "")
     if raw:
         keys = [k.strip() for k in raw.split(",") if k.strip()]
     i = 1
     while True:
-        k = os.environ.get(f"OPENROUTER_KEY_{i}", "")
+        k = os.environ.get(f"GROQ_KEY_{i}", "")
         if not k:
             break
         keys.append(k.strip())
         i += 1
     return keys
 
-OPENROUTER_KEYS = _load_keys()
+GROQ_KEYS = _load_keys()
 _key_index = 0
 
 logging.basicConfig(
@@ -43,17 +37,17 @@ logger = logging.getLogger(__name__)
 
 
 def get_current_key():
-    if not OPENROUTER_KEYS:
-        raise RuntimeError("Немає жодного OpenRouter ключа!")
-    return OPENROUTER_KEYS[_key_index]
+    if not GROQ_KEYS:
+        raise RuntimeError("Немає жодного Groq ключа!")
+    return GROQ_KEYS[_key_index]
 
 
 def rotate_key():
     global _key_index
-    if len(OPENROUTER_KEYS) <= 1:
+    if len(GROQ_KEYS) <= 1:
         return False
-    _key_index = (_key_index + 1) % len(OPENROUTER_KEYS)
-    logger.warning(f"Ротація ключа! Тепер #{_key_index + 1}/{len(OPENROUTER_KEYS)}")
+    _key_index = (_key_index + 1) % len(GROQ_KEYS)
+    logger.warning(f"Ротація ключа! Тепер #{_key_index + 1}/{len(GROQ_KEYS)}")
     return True
 
 
@@ -80,8 +74,17 @@ SYSTEM_PROMPT = (
 
 chat_histories = {}
 
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [KeyboardButton("💬 Новий чат"), KeyboardButton("📋 Історія чатів")],
+        [KeyboardButton("⚙️ Налаштування")],
+    ],
+    resize_keyboard=True,
+    persistent=True,
+)
 
-def ask_openrouter(messages):
+
+def ask_groq(messages):
     last_error = None
     attempted = set()
 
@@ -90,20 +93,18 @@ def ask_openrouter(messages):
         key_id = _key_index
 
         if key_id in attempted:
-            raise last_error or RuntimeError("Всі ключі заблоковані")
+            raise last_error or RuntimeError("Всі Groq ключі вичерпані")
 
         attempted.add(key_id)
 
         headers = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://t.me/bot",
-            "X-Title": "VyteAI Bot",
         }
 
         try:
             resp = requests.post(
-                OPENROUTER_URL,
+                GROQ_URL,
                 json={"model": MODEL, "messages": messages, "max_tokens": 4096},
                 headers=headers,
                 timeout=120,
@@ -127,7 +128,7 @@ def ask_openrouter(messages):
             return resp.json()["choices"][0]["message"]["content"]
 
         except requests.exceptions.Timeout:
-            raise RuntimeError("OpenRouter не відповідає (timeout)")
+            raise RuntimeError("Groq не відповідає (timeout)")
         except requests.HTTPError:
             raise
 
@@ -149,31 +150,73 @@ def get_filename(lang, index, original_name=None):
     return f"{base}{suffix}.{ext}"
 
 
+def format_history(history):
+    lines = []
+    for msg in history:
+        if msg["role"] == "user":
+            text = msg["content"]
+            if len(text) > 80:
+                text = text[:80] + "..."
+            lines.append(f"👤 {text}")
+        elif msg["role"] == "assistant":
+            text = msg["content"]
+            if len(text) > 80:
+                text = text[:80] + "..."
+            lines.append(f"🤖 {text}")
+    return "\n\n".join(lines) if lines else "Історія порожня."
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привіт! Я VyteAI — твій AI-асистент.\n\n"
         "💬 Напиши будь-що — я відповім.\n"
         "📁 Попроси зробити файл — надішлю його!\n"
         "✏️ Прикріпи файл + напиши що змінити — відредагую і поверну!\n\n"
-        "Приклади:\n"
-        "• Зроби мені сайт на HTML\n"
-        "• [прикріпи файл] Додай темну тему\n"
-        "• [прикріпи файл] Виправ помилки\n\n"
-        f"🔑 Активних ключів: {len(OPENROUTER_KEYS)}\n"
-        "Команда /reset — очистити розмову."
+        f"🔑 Активних ключів: {len(GROQ_KEYS)}\n"
+        "⚡️ Працює на Groq (llama-3.3-70b)",
+        reply_markup=MAIN_KEYBOARD,
     )
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     chat_histories.pop(chat_id, None)
-    await update.message.reply_text("🔄 Розмову очищено!")
+    await update.message.reply_text("🔄 Розмову очищено!", reply_markup=MAIN_KEYBOARD)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     message = update.message
     user_text = message.text or message.caption or ""
+
+    # Обробка кнопок меню
+    if user_text == "💬 Новий чат":
+        chat_histories.pop(chat_id, None)
+        await update.message.reply_text("🆕 Новий чат розпочато!", reply_markup=MAIN_KEYBOARD)
+        return
+
+    if user_text == "📋 Історія чатів":
+        history = chat_histories.get(chat_id, [])
+        user_msgs = [m for m in history if m["role"] != "system"]
+        if not user_msgs:
+            await update.message.reply_text("📋 Історія порожня.", reply_markup=MAIN_KEYBOARD)
+        else:
+            text = "📋 *Остання розмова:*\n\n" + format_history(user_msgs[-10:])
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+        return
+
+    if user_text == "⚙️ Налаштування":
+        await update.message.reply_text(
+            "⚙️ *Налаштування*\n\n"
+            f"🤖 Модель: `{MODEL}`\n"
+            f"🔑 Ключів: {len(GROQ_KEYS)}\n"
+            f"🔄 Активний ключ: #{_key_index + 1}\n"
+            f"💾 Повідомлень в пам'яті: до 20\n\n"
+            "Команда /reset — очистити розмову.",
+            parse_mode="Markdown",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
 
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
@@ -206,7 +249,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_message = user_text
 
     if not user_message:
-        await update.message.reply_text("✏️ Напиши що зробити або задай питання!")
+        await update.message.reply_text("✏️ Напиши що зробити або задай питання!", reply_markup=MAIN_KEYBOARD)
         return
 
     chat_histories[chat_id].append({"role": "user", "content": user_message})
@@ -215,10 +258,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_histories[chat_id] = [chat_histories[chat_id][0]] + chat_histories[chat_id][-20:]
 
     try:
-        ai_reply = ask_openrouter(chat_histories[chat_id])
+        ai_reply = ask_groq(chat_histories[chat_id])
     except Exception as e:
-        logger.error(f"OpenRouter error: {e}")
-        await update.message.reply_text(f"❌ Помилка: {e}")
+        logger.error(f"Groq error: {e}")
+        await update.message.reply_text(f"❌ Помилка: {e}", reply_markup=MAIN_KEYBOARD)
         return
 
     chat_histories[chat_id].append({"role": "assistant", "content": ai_reply})
@@ -239,20 +282,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_document(
                         document=InputFile(f, filename=filename),
                         caption=caption,
+                        reply_markup=MAIN_KEYBOARD,
                     )
             finally:
                 os.unlink(tmp_path)
 
         if len(clean_reply) > 1024:
             for chunk in [clean_reply[i:i+4096] for i in range(0, len(clean_reply), 4096)]:
-                await update.message.reply_text(chunk)
+                await update.message.reply_text(chunk, reply_markup=MAIN_KEYBOARD)
     else:
         for chunk in [ai_reply[i:i+4096] for i in range(0, len(ai_reply), 4096)]:
-            await update.message.reply_text(chunk)
+            await update.message.reply_text(chunk, reply_markup=MAIN_KEYBOARD)
 
 
 def main():
-    logger.info(f"Запуск з {len(OPENROUTER_KEYS)} ключами OpenRouter")
+    logger.info(f"Запуск з {len(GROQ_KEYS)} Groq ключами, модель: {MODEL}")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
