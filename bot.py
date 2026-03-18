@@ -80,7 +80,6 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("⚙️ Налаштування")],
     ],
     resize_keyboard=True,
-    persistent=True,
 )
 
 
