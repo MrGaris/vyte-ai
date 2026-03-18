@@ -14,7 +14,7 @@ PORT = int(os.environ.get("PORT", 8443))
 APP_URL = os.environ.get("APP_URL", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
-HF_IMAGE_URL = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0"
+HF_IMAGE_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
 
 
 def _load_keys():
