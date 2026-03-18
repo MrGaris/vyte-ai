@@ -7,7 +7,7 @@ from telegram import Update, InputFile
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8651979197:AAFOFTR5s8vzFhZ-6K4q1jgIBoGOyup5qUk")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "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")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "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)
 MODEL = "arcee-ai/trinity-large-preview:free"
 PORT = int(os.environ.get("PORT", 8443))
 APP_URL = os.environ.get("APP_URL", "")
