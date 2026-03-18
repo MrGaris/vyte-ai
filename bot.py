@@ -11,6 +11,9 @@ MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 PORT = int(os.environ.get("PORT", 8443))
 APP_URL = os.environ.get("APP_URL", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
+HF_IMAGE_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+
 
 def _load_keys():
     keys = []
@@ -77,10 +80,20 @@ chat_histories = {}
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("💬 Новий чат"), KeyboardButton("📋 Історія чатів")],
-        [KeyboardButton("⚙️ Налаштування")],
+        [KeyboardButton("🎨 Згенерувати зображення"), KeyboardButton("⚙️ Налаштування")],
     ],
     resize_keyboard=True,
 )
+
+
+
+def generate_image(prompt):
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {"inputs": prompt, "options": {"wait_for_model": True}}
+    resp = requests.post(HF_IMAGE_URL, headers=headers, json=payload, timeout=120)
+    if resp.status_code == 200:
+        return resp.content
+    raise RuntimeError(f"HF помилка: {resp.status_code} {resp.text[:200]}")
 
 
 def ask_groq(messages):
@@ -204,6 +217,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
         return
 
+    if user_text == "🎨 Згенерувати зображення":
+        await update.message.reply_text(
+            "🎨 Напиши опис зображення після команди /image\n"
+            "Приклад: /image красивий захід сонця над горами"
+        )
+        return
+
     if user_text == "⚙️ Налаштування":
         await update.message.reply_text(
             "⚙️ *Налаштування*\n\n"
@@ -294,11 +314,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(chunk, reply_markup=MAIN_KEYBOARD)
 
 
+
+async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    prompt = " ".join(context.args)
+    if not prompt:
+        await update.message.reply_text(
+            "✏️ Вкажи опис зображення!\n"
+            "Приклад: /image красивий захід сонця над горами"
+        )
+        return
+    await update.message.reply_text("🎨 Генерую зображення, зачекай (~20-30 сек)...")
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+    try:
+        image_bytes = generate_image(prompt)
+        await update.message.reply_photo(
+            photo=image_bytes,
+            caption=f"🎨 {prompt}",
+            reply_markup=MAIN_KEYBOARD,
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Помилка генерації: {e}", reply_markup=MAIN_KEYBOARD)
+
 def main():
     logger.info(f"Запуск з {len(GROQ_KEYS)} Groq ключами, модель: {MODEL}")
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("image", image_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_message))
 
