@@ -89,7 +89,21 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 
 
 
+
+def translate_to_english(text):
+    """Перекладає текст на англійську через Groq якщо потрібно."""
+    messages = [
+        {"role": "system", "content": "You are a translator. Translate the user's text to English for image generation. Return ONLY the translated text, nothing else."},
+        {"role": "user", "content": text}
+    ]
+    try:
+        return ask_groq(messages)
+    except Exception:
+        return text
+
+
 def generate_image(prompt):
+    prompt = translate_to_english(prompt)
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     payload = {"inputs": prompt, "options": {"wait_for_model": True}}
     resp = requests.post(HF_IMAGE_URL, headers=headers, json=payload, timeout=120)
